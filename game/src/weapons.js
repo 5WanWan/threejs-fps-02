@@ -1,202 +1,97 @@
-// Weapons and the buy shop. Every weapon is hitscan with a damage falloff, a
-// recoil pattern and a spread model that punishes firing on the move — the
-// judge's criterion 2. Prices are the economy the buy menu spends.
-//
-// Damage: body damage at close range; headshots multiply by 4; legs by 0.75.
-// Spread is in radians of random cone added to the aim direction. Rifles and
-// the marksman rifle support aim-down-sights (ads): holding right mouse
-// narrows the field of view, tightens spread and slows movement — stopping to
-// aim pays.
+// weapons.js — weapon and grenade definitions plus the buy catalogue.
+// Damage is per body hit; headshots multiply by 2. Prices are the economy the
+// buy menu and the bots both use.
 export const WEAPONS = {
   p9: {
-    id: 'p9',
-    name: 'SP-9 Sidearm',
-    kind: 'pistol',
-    price: 0,
-    damage: 32,
-    headMult: 4,
-    legMult: 0.75,
-    falloffStart: 18,
-    falloffEnd: 45,
-    falloffMin: 0.55,
-    rpm: 400,
-    auto: false,
-    mag: 12,
-    reserve: 36,
-    reloadSeconds: 1.4,
-    spreadBase: 0.006,
-    spreadMove: 0.02,
-    spreadAir: 0.03,
-    spreadBloom: 0.004,
-    bloomMax: 0.03,
-    bloomDecay: 0.06,
-    recoilPitch: 0.011,
-    recoilYaw: 0.004,
-    range: 70,
-    pellets: 1,
-    tracer: 0xffe9a8,
+    name: 'P9 Sidearm', price: 0, slot: 2,
+    damage: 26, headMult: 2, rate: 0.32, auto: false,
+    mag: 12, reserve: 48, reload: 1.4,
+    spread: 0.95, moveSpread: 1.6, adsSpread: 0.55,
+    recoil: 0.011, kick: 0.35, range: 60,
+    sound: 'pistol', tracer: 0xffe08a,
   },
   ar77: {
-    id: 'ar77',
-    name: 'AR-77 Carbine',
-    kind: 'rifle',
-    price: 2700,
-    damage: 33,
-    headMult: 4,
-    legMult: 0.75,
-    falloffStart: 22,
-    falloffEnd: 55,
-    falloffMin: 0.6,
-    rpm: 600,
-    auto: true,
-    mag: 30,
-    reserve: 90,
-    reloadSeconds: 2.2,
-    spreadBase: 0.004,
-    spreadMove: 0.024,
-    spreadAir: 0.035,
-    spreadBloom: 0.0035,
-    bloomMax: 0.042,
-    bloomDecay: 0.05,
-    recoilPitch: 0.013,
-    recoilYaw: 0.006,
-    range: 90,
-    pellets: 1,
-    ads: true,
-    adsFov: 58,
-    adsSpread: 0.55,
-    adsMove: 0.65,
-    tracer: 0xffd27a,
-  },
-  sg12: {
-    id: 'sg12',
-    name: 'SG-12 Breacher',
-    kind: 'shotgun',
-    price: 1200,
-    damage: 11,
-    headMult: 4,
-    legMult: 0.75,
-    falloffStart: 8,
-    falloffEnd: 22,
-    falloffMin: 0.35,
-    rpm: 70,
-    auto: false,
-    mag: 5,
-    reserve: 25,
-    reloadSeconds: 2.8,
-    spreadBase: 0.045,
-    spreadMove: 0.05,
-    spreadAir: 0.06,
-    spreadBloom: 0.01,
-    bloomMax: 0.05,
-    bloomDecay: 0.08,
-    recoilPitch: 0.038,
-    recoilYaw: 0.012,
-    range: 40,
-    pellets: 8,
-    tracer: 0xffc46b,
+    name: 'AR-77 Rifle', price: 1600, slot: 1,
+    damage: 33, headMult: 2, rate: 0.105, auto: true,
+    mag: 30, reserve: 90, reload: 2.2,
+    spread: 0.55, moveSpread: 1.9, adsSpread: 0.30,
+    recoil: 0.014, kick: 0.5, range: 90,
+    sound: 'rifle', tracer: 0xffd27a,
   },
   sr90: {
-    id: 'sr90',
-    name: 'SR-90 Longshot',
-    kind: 'marksman',
-    price: 4750,
-    damage: 88,
-    headMult: 4,
-    legMult: 0.75,
-    falloffStart: 30,
-    falloffEnd: 80,
-    falloffMin: 0.75,
-    rpm: 45,
-    auto: false,
-    mag: 5,
-    reserve: 15,
-    reloadSeconds: 3.1,
-    spreadBase: 0.0009,
-    spreadMove: 0.05,
-    spreadAir: 0.06,
-    spreadBloom: 0.012,
-    bloomMax: 0.02,
-    bloomDecay: 0.04,
-    recoilPitch: 0.05,
-    recoilYaw: 0.008,
-    range: 120,
-    pellets: 1,
-    scoped: true,
-    ads: true,
-    adsFov: 30,
-    adsSpread: 0.4,
-    adsMove: 0.5,
-    tracer: 0xd8f4ff,
+    name: 'SR-90 Longshot', price: 2200, slot: 1,
+    damage: 88, headMult: 2.2, rate: 1.25, auto: false,
+    mag: 5, reserve: 15, reload: 3.0,
+    spread: 0.12, moveSpread: 3.2, adsSpread: 0.05,
+    recoil: 0.05, kick: 1.6, range: 140,
+    sound: 'sniper', tracer: 0xfff2c0, scoped: true,
+  },
+  vex9: {
+    name: 'VEX-9 SMG', price: 900, slot: 1,
+    damage: 22, headMult: 2, rate: 0.072, auto: true,
+    mag: 32, reserve: 96, reload: 1.9,
+    spread: 1.05, moveSpread: 1.5, adsSpread: 0.6,
+    recoil: 0.009, kick: 0.3, range: 55,
+    sound: 'smg', tracer: 0xffe08a,
   },
 };
 
 export const GRENADES = {
-  frag: { id: 'frag', name: 'FRAG Grenade', price: 300, radius: 6, damage: 120, minDamage: 20, fuse: 1.6 },
-  smoke: { id: 'smoke', name: 'SMOKE Grenade', price: 300, radius: 5, duration: 14 },
-  flash: { id: 'flash', name: 'FLASH Grenade', price: 200, radius: 22, duration: 2.2 },
+  frag: { name: 'Frag Grenade', price: 200, radius: 7, maxDamage: 95, fuse: 1.4 },
+  smoke: { name: 'Smoke Grenade', price: 150, radius: 5.5, duration: 11 },
+  flash: { name: 'Flashbang', price: 150, radius: 18, duration: 3 },
 };
 
-export const ARMOR_PRICE = 650;
-export const ARMOR_POINTS = 100;
+export const BUY_ITEMS = [
+  { kind: 'weapon', id: 'ar77', key: '1' },
+  { kind: 'weapon', id: 'sr90', key: '2' },
+  { kind: 'weapon', id: 'vex9', key: '3' },
+  { kind: 'armor', id: 'kevlar', key: '4', name: 'Kevlar Vest', price: 150 },
+  { kind: 'grenade', id: 'frag', key: '5' },
+  { kind: 'grenade', id: 'smoke', key: '6' },
+  { kind: 'grenade', id: 'flash', key: '7' },
+  { kind: 'ammo', id: 'ammo', key: '8', name: 'Refill Ammo', price: 100 },
+];
 
-// A fresh loadout: sidearm owned, rifle not yet bought.
-export function createLoadout() {
-  return {
-    owned: {
-      p9: { mag: WEAPONS.p9.mag, reserve: WEAPONS.p9.reserve },
-    },
-    current: 'p9',
-    grenades: { frag: 0, smoke: 0, flash: 0 },
-    armor: 0,
-    bloom: 0,
-    reloadingUntil: 0,
-    reloadingWeapon: null,
-    lastShotAt: -10,
-  };
+export function weaponOf(f) { return WEAPONS[f.weapon]; }
+
+export function giveWeapon(f, id) {
+  const w = WEAPONS[id];
+  if (!w) return false;
+  if (!f.weapons[id]) f.weapons[id] = { mag: w.mag, reserve: w.reserve };
+  else { f.weapons[id].mag = w.mag; f.weapons[id].reserve = w.reserve; }
+  f.weapon = id;
+  return true;
 }
 
-// Buy a weapon or item. Returns true when the purchase went through.
-export function buy(agent, itemId) {
-  const weapon = WEAPONS[itemId];
-  if (weapon) {
-    if (agent.money < weapon.price || agent.loadout.owned[itemId]) return false;
-    agent.money -= weapon.price;
-    agent.loadout.owned[itemId] = { mag: weapon.mag, reserve: weapon.reserve };
-    agent.loadout.current = itemId;
+export function buyItem(f, item) {
+  if (item.kind === 'weapon') {
+    const w = WEAPONS[item.id];
+    if (f.money < w.price || f.weapons[item.id]) return false;
+    f.money -= w.price;
+    giveWeapon(f, item.id);
     return true;
   }
-  const grenade = GRENADES[itemId];
-  if (grenade) {
-    if (agent.money < grenade.price || agent.loadout.grenades[itemId] >= 2) return false;
-    agent.money -= grenade.price;
-    agent.loadout.grenades[itemId] += 1;
+  if (item.kind === 'armor') {
+    if (f.money < item.price || f.hasKevlar) return false;
+    f.money -= item.price;
+    f.hasKevlar = true; f.armor = 100;
     return true;
   }
-  if (itemId === 'armor') {
-    if (agent.money < ARMOR_PRICE || agent.loadout.armor >= ARMOR_POINTS) return false;
-    agent.money -= ARMOR_PRICE;
-    agent.loadout.armor = ARMOR_POINTS;
+  if (item.kind === 'grenade') {
+    const g = GRENADES[item.id];
+    if (f.money < g.price || f.grenades[item.id] >= 2) return false;
+    f.money -= g.price;
+    f.grenades[item.id]++;
+    return true;
+  }
+  if (item.kind === 'ammo') {
+    const w = WEAPONS[f.weapon];
+    const slot = f.weapons[f.weapon];
+    if (f.money < item.price || slot.reserve >= w.reserve) return false;
+    f.money -= item.price;
+    slot.reserve = w.reserve;
     return true;
   }
   return false;
-}
-
-// Damage of one pellet at a distance, before the head/leg multiplier.
-export function damageAt(def, distance) {
-  if (distance <= def.falloffStart) return def.damage;
-  if (distance >= def.falloffEnd) return def.damage * def.falloffMin;
-  const t = (distance - def.falloffStart) / (def.falloffEnd - def.falloffStart);
-  return def.damage * (1 - (1 - def.falloffMin) * t);
-}
-
-// Current spread cone for an agent: base + movement + air + bloom from
-// firing; aiming down sights tightens it, crouching tightens it further.
-export function currentSpread(def, loadout, speed2d, crouched, airborne, aiming = false) {
-  let spread = def.spreadBase + loadout.bloom;
-  spread += (speed2d / 6) * def.spreadMove;
-  if (airborne) spread += def.spreadAir;
-  if (crouched) spread *= 0.6;
-  if (aiming && def.ads) spread *= def.adsSpread;
-  return spread;
 }

@@ -1,187 +1,189 @@
-// CINDERLINE look plan: a smelter yard at dusk, brighter than a foundry at
-// night so the scene reads at a glance in a screenshot. One palette, used
-// everywhere — canvas (sky/fog), surface (concrete), hairline (dark steel),
-// ink (warm white), muted (cool grey), amber (Vanguard + kiln glow) and teal
-// (Sentinel + gantry lights). All textures are drawn on canvas at runtime:
-// no image files, no network, and the game stays plain static files.
+// palette.js — the Cinderline look: dusk indigo sky, warm slag orange, cold steel.
+// All textures are drawn on canvases at load time; nothing is fetched over the
+// network, so the game runs fully offline from static files.
 import * as THREE from 'three';
 
 export const PALETTE = {
-  canvas: 0x232a35, // dusk sky / fog — light enough that walls read
-  surface: 0x33383f, // concrete ground
-  hairline: 0x16191d, // dark steel
-  ink: 0xe9e6df, // warm white
-  muted: 0x8a939c, // cool grey
-  amber: 0xf0a830, // Vanguard + kiln
-  teal: 0x2fb8a8, // Sentinel + gantry
-  rust: 0x9a5a34, // rusted metal
-  danger: 0xd8402e, // hazard red
-  molten: 0xff7a1a, // molten slag channel
+  skyTop: 0x1b1440,
+  skyBottom: 0x3a1f3d,
+  fog: 0x241a33,
+  ground: 0x33323a,
+  concrete: 0x4a4852,
+  concreteDark: 0x35343c,
+  steel: 0x5d6470,
+  steelDark: 0x3c414d,
+  rust: 0x8a4a26,
+  slag: 0xff6a00,
+  slagHot: 0xffb347,
+  kilnBrick: 0x7a3b2e,
+  hazardYellow: 0xe8b400,
+  hazardBlack: 0x1a1a1a,
+  cinder: 0xf59e0b,   // player team (Cinder) trim
+  slagTeam: 0xef4444, // enemy team (Slag) trim
+  teal: 0x2dd4bf,     // HUD accent
+  white: 0xf5f2ea,
 };
 
-const textureCache = new Map();
+const _cache = new Map();
 
-// Draw a 256x256 canvas with a painter function, cache it by key.
-function canvasTexture(key, painter, repeatX = 1, repeatY = 1) {
-  const hit = textureCache.get(key);
-  if (hit) return hit;
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  painter(canvas.getContext('2d'), 256);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(repeatX, repeatY);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 4;
-  textureCache.set(key, texture);
-  return texture;
+function canvasTexture(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
-function speckle(ctx, size, count, alpha, light, dark) {
-  for (let i = 0; i < count; i += 1) {
-    const v = Math.random();
-    ctx.fillStyle = v > 0.5 ? light : dark;
-    ctx.globalAlpha = alpha * (0.4 + Math.random() * 0.6);
-    const s = 1 + Math.random() * 2.5;
-    ctx.fillRect(Math.random() * size, Math.random() * size, s, s);
+function noiseOn(ctx, w, h, rnd, n, alpha, light, dark) {
+  for (let i = 0; i < n; i++) {
+    const g = rnd() * 255 | 0;
+    ctx.fillStyle = `rgba(${g},${g},${g},${alpha})`;
+    ctx.fillRect(rnd() * w | 0, rnd() * h | 0, 1 + rnd() * 3, 1 + rnd() * 3);
   }
-  ctx.globalAlpha = 1;
+  void light; void dark;
+}
+
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 export function concreteTexture() {
-  return canvasTexture('concrete', (ctx, s) => {
-    ctx.fillStyle = '#3a3f46';
-    ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 2600, 0.16, '#54595f', '#2b2e33');
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, s - 2, s - 2);
-    // expansion joints
-    ctx.strokeStyle = 'rgba(0,0,0,0.22)';
-    ctx.beginPath();
-    ctx.moveTo(0, s / 2);
-    ctx.lineTo(s, s / 2);
-    ctx.moveTo(s / 2, 0);
-    ctx.lineTo(s / 2, s);
-    ctx.stroke();
-  }, 12, 9);
+  if (_cache.has('concrete')) return _cache.get('concrete');
+  const t = canvasTexture(256, 256, (ctx, w, h) => {
+    ctx.fillStyle = '#4a4852'; ctx.fillRect(0, 0, w, h);
+    const rnd = seeded(11);
+    noiseOn(ctx, w, h, rnd, 2600, 0.10);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, w - 2, h - 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, h); ctx.stroke();
+  });
+  _cache.set('concrete', t);
+  return t;
+}
+
+export function metalTexture() {
+  if (_cache.has('metal')) return _cache.get('metal');
+  const t = canvasTexture(256, 256, (ctx, w, h) => {
+    ctx.fillStyle = '#5d6470'; ctx.fillRect(0, 0, w, h);
+    const rnd = seeded(23);
+    noiseOn(ctx, w, h, rnd, 1400, 0.07);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    for (let y = 0; y < 4; y++) ctx.fillRect(0, y * 64 + 30, w, 3);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    for (let y = 0; y < 4; y++) ctx.fillRect(0, y * 64 + 33, w, 2);
+    // rivets
+    ctx.fillStyle = 'rgba(20,20,24,0.6)';
+    for (let x = 16; x < w; x += 32) for (let y = 16; y < h; y += 64) {
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+  _cache.set('metal', t);
+  return t;
 }
 
 export function hazardTexture() {
-  return canvasTexture('hazard', (ctx, s) => {
-    ctx.fillStyle = '#d8a020';
-    ctx.fillRect(0, 0, s, s);
-    ctx.fillStyle = '#191b1e';
-    for (let i = -s; i < s * 2; i += 64) {
+  if (_cache.has('hazard')) return _cache.get('hazard');
+  const t = canvasTexture(128, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#e8b400'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#1a1a1a';
+    for (let i = -2; i < 6; i++) {
       ctx.beginPath();
-      ctx.moveTo(i, s);
-      ctx.lineTo(i + 32, 0);
-      ctx.lineTo(i + 64, 0);
-      ctx.lineTo(i + 32, s);
-      ctx.closePath();
-      ctx.fill();
-    }
-    speckle(ctx, s, 500, 0.12, '#ffffff', '#000000');
-  });
-}
-
-export function metalTexture(base = '#454d56') {
-  return canvasTexture(`metal${base}`, (ctx, s) => {
-    ctx.fillStyle = base;
-    ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 1400, 0.1, '#646e78', '#2a2e33');
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    for (let y = 0; y < s; y += 32) ctx.fillRect(0, y, s, 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    for (let y = 16; y < s; y += 32) ctx.fillRect(0, y, s, 2);
-  });
-}
-
-export function rustTexture() {
-  return canvasTexture('rust', (ctx, s) => {
-    ctx.fillStyle = '#7a4a30';
-    ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 2200, 0.22, '#a86a42', '#4a2a1a');
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 8; i += 1) {
-      const y = Math.random() * s;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(s, y + (Math.random() * 20 - 10));
-      ctx.stroke();
+      ctx.moveTo(i * 32, h); ctx.lineTo(i * 32 + 32, 0);
+      ctx.lineTo(i * 32 + 48, 0); ctx.lineTo(i * 32 + 16, h);
+      ctx.closePath(); ctx.fill();
     }
   });
+  _cache.set('hazard', t);
+  return t;
 }
 
-export function fenceTexture() {
-  return canvasTexture('fence', (ctx, s) => {
-    ctx.clearRect(0, 0, s, s);
-    ctx.strokeStyle = 'rgba(180,190,200,0.85)';
-    ctx.lineWidth = 2;
-    for (let i = -s; i < s * 2; i += 16) {
-      ctx.beginPath();
-      ctx.moveTo(i, 0);
-      ctx.lineTo(i + s, s);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(i + s, 0);
-      ctx.lineTo(i, s);
-      ctx.stroke();
-    }
-  });
-}
-
-export function containerTexture(color) {
-  return canvasTexture(`container${color}`, (ctx, s) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 1200, 0.12, '#ffffff', '#000000');
-    ctx.fillStyle = 'rgba(0,0,0,0.28)';
-    for (let x = 0; x < s; x += 32) ctx.fillRect(x, 0, 3, s);
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(0, 0, s, 6);
-  });
-}
-
-// Molten slag: a hot orange field with darker cooling cracks.
 export function slagTexture() {
-  return canvasTexture('slag', (ctx, s) => {
-    ctx.fillStyle = '#ff7a1a';
-    ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 900, 0.35, '#ffc46b', '#c33d00');
-    ctx.strokeStyle = 'rgba(60,10,0,0.55)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 10; i += 1) {
-      const y = Math.random() * s;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.bezierCurveTo(s * 0.3, y + 14, s * 0.6, y - 14, s, y + 6);
-      ctx.stroke();
+  if (_cache.has('slag')) return _cache.get('slag');
+  const t = canvasTexture(256, 256, (ctx, w, h) => {
+    const g = ctx.createLinearGradient(0, 0, w, 0);
+    g.addColorStop(0, '#ff2d00'); g.addColorStop(0.45, '#ff6a00');
+    g.addColorStop(0.7, '#ffb347'); g.addColorStop(1, '#ff3d00');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const rnd = seeded(37);
+    for (let i = 0; i < 90; i++) {
+      ctx.fillStyle = `rgba(255,${180 + rnd() * 60 | 0},40,${0.25 + rnd() * 0.5})`;
+      const y = rnd() * h;
+      ctx.fillRect(rnd() * w, y, 8 + rnd() * 40, 1.5 + rnd() * 3);
     }
   });
+  _cache.set('slag', t);
+  return t;
 }
 
-const materialCache = new Map();
-
-// One shared MeshStandardMaterial per (color, roughness, metalness, map) key.
-export function mat(color, options = {}) {
-  const key = `${color}|${options.roughness ?? 0.9}|${options.metalness ?? 0}|${options.map ?? ''}|${options.emissive ?? ''}|${options.emissiveIntensity ?? 1}`;
-  let material = materialCache.get(key);
-  if (material) return material;
-  material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: options.roughness ?? 0.9,
-    metalness: options.metalness ?? 0,
-    map: options.map ?? null,
-    emissive: options.emissive ?? 0x000000,
-    emissiveIntensity: options.emissiveIntensity ?? 1,
-    transparent: options.transparent ?? false,
-    opacity: options.opacity ?? 1,
-    side: options.side ?? THREE.FrontSide,
+export function brickTexture() {
+  if (_cache.has('brick')) return _cache.get('brick');
+  const t = canvasTexture(256, 256, (ctx, w, h) => {
+    ctx.fillStyle = '#7a3b2e'; ctx.fillRect(0, 0, w, h);
+    const rnd = seeded(51);
+    ctx.strokeStyle = 'rgba(20,8,6,0.55)'; ctx.lineWidth = 3;
+    for (let y = 0; y < 8; y++) {
+      const off = (y % 2) * 32;
+      for (let x = -1; x < 5; x++) {
+        ctx.fillStyle = `rgba(${110 + rnd() * 40 | 0},${52 + rnd() * 18 | 0},${40 + rnd() * 12 | 0},1)`;
+        ctx.fillRect(x * 64 + off + 2, y * 32 + 2, 60, 28);
+      }
+      ctx.beginPath(); ctx.moveTo(0, y * 32); ctx.lineTo(w, y * 32); ctx.stroke();
+    }
   });
-  materialCache.set(key, material);
-  return material;
+  _cache.set('brick', t);
+  return t;
+}
+
+export function siteLetterTexture(letter) {
+  const key = 'site' + letter;
+  if (_cache.has(key)) return _cache.get(key);
+  const t = canvasTexture(128, 128, (ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(10,10,16,0.55)';
+    ctx.beginPath(); ctx.arc(64, 64, 58, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(64, 64, 58, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#f5f2ea';
+    ctx.font = 'bold 72px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(letter, 64, 68);
+  });
+  _cache.set(key, t);
+  return t;
+}
+
+export function starTexture() {
+  if (_cache.has('star')) return _cache.get('star');
+  const t = canvasTexture(64, 64, (ctx) => {
+    ctx.clearRect(0, 0, 64, 64);
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.35, 'rgba(255,255,255,0.5)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+  });
+  _cache.set('star', t);
+  return t;
+}
+
+const _mats = new Map();
+export function mat(color, opts = {}) {
+  const key = color + JSON.stringify(opts);
+  if (_mats.has(key)) return _mats.get(key);
+  const m = new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.15, ...opts });
+  _mats.set(key, m);
+  return m;
 }

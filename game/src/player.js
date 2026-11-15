@@ -1,194 +1,190 @@
-// The player: first-person movement with acceleration, friction, crouch and
-// jump, sliding collision against the world's AABB colliders, and recoil that
-// kicks the view up and recovers. One agent object, shared with the bots —
-// combat and the HUD treat the player and bots the same way.
-//
-// Aim-down-sights: holding right mouse with a rifle or the marksman rifle
-// tightens spread and slows movement, so stopping to aim pays (criterion 2).
+// player.js — the human fighter: acceleration-based movement with crouch and
+// jump, aim-down-sights, recoil and spread that punish firing on the move,
+// reloading, weapon switching, grenade throws, and plant/defuse channels.
 import * as THREE from 'three';
-import { TEAMS } from './state.js';
-import { createLoadout, WEAPONS } from './weapons.js';
+import { moveBody, segmentBlocked } from './world.js';
+import { weaponOf, giveWeapon, GRENADES } from './weapons.js';
+import { shoot, throwGrenade, eyeHeight, lookDir } from './combat.js';
+import { clamp, damp } from './rng.js';
+import { PLANT_TIME, DEFUSE_TIME } from './state.js';
 import { V1 } from './tmp.js';
 
-const RADIUS = 0.36;
-const EYE_STAND = 1.62;
-const EYE_CROUCH = 1.08;
 const WALK_SPEED = 4.4;
-const SPRINT_SPEED = 6.3;
-const CROUCH_SPEED = 2.2;
+const CROUCH_SPEED = 2.3;
+const ADS_SPEED = 2.9;
 const ACCEL = 42;
 const FRICTION = 11;
-const GRAVITY = 16;
-const JUMP_SPEED = 5.4;
 
-export function createPlayerAgent(id, name) {
-  return {
-    id,
-    name,
-    team: TEAMS.VANGUARD,
-    isPlayer: true,
-    alive: true,
-    pos: new THREE.Vector3(-28, 0, 18),
-    vel: new THREE.Vector3(),
-    yaw: 0,
-    pitch: 0,
-    eye: EYE_STAND,
-    hp: 100,
-    armor: 0,
-    money: 800,
-    kills: 0,
-    deaths: 0,
-    loadout: createLoadout(),
-    grenades: { frag: 0, smoke: 0, flash: 0 },
-    crouched: false,
-    onGround: true,
-    speed2d: 0,
-    hasCharge: true,
-    lastDamageAt: -10,
-    lastDamageFrom: null,
-    flashUntil: 0,
-    aiming: false,
-    mesh: null,
-    bot: null,
-  };
-}
+export function updatePlayer(state, world, fx, grenades, input, audio, dt, now) {
+  const p = state.entities[0];
+  if (!p.alive) return;
+  const w = weaponOf(p);
 
-// A simple viewmodel: a gun built from boxes, attached to the camera.
-export function createViewModel(camera, scene) {
-  const group = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.09, 0.13, 0.52),
-    new THREE.MeshStandardMaterial({ color: 0x33373d, roughness: 0.45, metalness: 0.6 }),
-  );
-  body.position.set(0, -0.02, -0.1);
-  group.add(body);
-  const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.022, 0.022, 0.34, 8),
-    new THREE.MeshStandardMaterial({ color: 0x22252a, roughness: 0.35, metalness: 0.7 }),
-  );
-  barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0.01, -0.5);
-  group.add(barrel);
-  const grip = new THREE.Mesh(
-    new THREE.BoxGeometry(0.07, 0.16, 0.09),
-    new THREE.MeshStandardMaterial({ color: 0x2e3238, roughness: 0.7, metalness: 0.2 }),
-  );
-  grip.position.set(0, -0.12, 0.08);
-  grip.rotation.x = 0.3;
-  group.add(grip);
-  const sight = new THREE.Mesh(
-    new THREE.BoxGeometry(0.02, 0.05, 0.06),
-    new THREE.MeshStandardMaterial({ color: 0xf0a830, roughness: 0.4, metalness: 0.3, emissive: 0x664400, emissiveIntensity: 0.6 }),
-  );
-  sight.position.set(0, 0.06, -0.28);
-  group.add(sight);
-  group.position.set(0.26, -0.24, -0.5);
-  camera.add(group);
-  scene.add(camera);
-  return group;
-}
+  // --- look: mouse deltas, pitch clamped, recoil kick recovering ----------
+  const [mdx, mdy] = input.consumeMouse();
+  const sens = p.ads ? 0.0011 : 0.0021;
+  p.yaw -= mdx * sens;
+  p.pitch = clamp(p.pitch - mdy * sens, -1.45, 1.45);
+  p.recoil = damp(p.recoil, 0, 7, dt);
 
-export function createPlayer(world, agent) {
-  let recoilPitch = 0;
-  let recoilYaw = 0;
-  let stepAccum = 0;
-  let onStep = null;
+  // --- movement: accel toward the wish direction, friction when idle -------
+  const fwd = input.forwardAxis();
+  const str = input.strafeAxis();
+  const wantCrouch = input.down('ControlLeft') || input.down('KeyC');
+  p.crouch = wantCrouch;
+  const speed = p.crouch ? CROUCH_SPEED : p.ads ? ADS_SPEED : WALK_SPEED;
+  const sin = Math.sin(p.yaw), cos = Math.cos(p.yaw);
+  // Forward is (-sin, -cos); right is (cos, -sin).
+  let wx = (-sin * fwd + cos * str);
+  let wz = (-cos * fwd - sin * str);
+  const wl = Math.hypot(wx, wz);
+  if (wl > 0.001) { wx /= wl; wz /= wl; }
+  const moving = wl > 0.001;
+  p.vx = damp(p.vx, wx * speed, moving ? ACCEL / speed * 9 : FRICTION, dt);
+  p.vz = damp(p.vz, wz * speed, moving ? ACCEL / speed * 9 : FRICTION, dt);
+  if (input.down('Space') && p.onGround) {
+    p.vy = 7.2;
+    p.onGround = false;
+  }
+  moveBody(p, dt, world.colliders);
+  p.moveAmount = damp(p.moveAmount, clamp(Math.hypot(p.vx, p.vz) / WALK_SPEED, 0, 1), 8, dt);
 
-  function look(dx, dy) {
-    agent.yaw -= dx * 0.0021;
-    agent.pitch -= dy * 0.0021;
-    agent.pitch = Math.max(-1.52, Math.min(1.52, agent.pitch));
+  // Footstep ticks.
+  if (p.onGround && p.moveAmount > 0.35) {
+    p._stepT = (p._stepT || 0) - dt * p.moveAmount;
+    if (p._stepT <= 0) { p._stepT = 0.42; audio.step(); }
   }
 
-  function applyRecoil(pitch, yaw) {
-    recoilPitch += pitch;
-    recoilYaw += yaw;
+  // --- aim down sights (right mouse button) --------------------------------
+  p.ads = input._rmb === true;
+
+  // --- spread: still + crouched + ADS is accurate; moving + firing is not --
+  const base = p.ads ? w.adsSpread : w.spread;
+  const movePenalty = 1 + p.moveAmount * w.moveSpread;
+  const airPenalty = p.onGround ? 1 : 1.8;
+  p.spread = base * movePenalty * airPenalty + p.recoil * 30;
+
+  // --- firing ----------------------------------------------------------------
+  if (p.reloading > 0) {
+    p.reloading -= dt;
+    if (p.reloading <= 0) {
+      const slot = p.weapons[p.weapon];
+      const need = w.mag - slot.mag;
+      const take = Math.min(need, slot.reserve);
+      slot.mag += take; slot.reserve -= take;
+    }
+  } else if (input.mouseDown && now - p.lastShot >= w.rate) {
+    const slot = p.weapons[p.weapon];
+    if (slot.mag > 0) {
+      const res = shoot(state, world, fx, p, now);
+      p.recoil = Math.min(0.09, p.recoil + w.recoil);
+      p.pitch += w.kick * 0.004;
+      audio.shot(w.sound);
+      if (res.kind === 'hit') audio.hit(res.head);
+    } else {
+      audio.dryFire();
+      startReload(p);
+    }
   }
 
-  // inputState is input.state: { keys, firing, firingSecondary, lookX, lookY }.
-  function step(dt, inputState, audio) {
-    if (!agent.alive) return;
-    // Recoil recovery: the view settles back toward the aim point.
-    recoilPitch = Math.max(0, recoilPitch - dt * 0.09);
-    recoilYaw *= Math.max(0, 1 - dt * 8);
-
-    const keys = inputState.keys;
-    const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
-    const strafe = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
-    agent.crouched = keys.has('ControlLeft') || keys.has('KeyC');
-    const def = WEAPONS[agent.loadout.current];
-    agent.aiming = !!def.ads && !!inputState.firingSecondary && !agent.crouched;
-    const sprinting = (keys.has('ShiftLeft') || keys.has('ShiftRight')) && forward > 0 && !agent.crouched && !agent.aiming;
-    let maxSpeed = agent.crouched ? CROUCH_SPEED : sprinting ? SPRINT_SPEED : WALK_SPEED;
-    if (agent.aiming) maxSpeed *= def.adsMove;
-
-    V1.set(Math.sin(agent.yaw), 0, Math.cos(agent.yaw));
-    // forward is -Z in camera space; yaw 0 faces -Z.
-    const fx = -Math.sin(agent.yaw);
-    const fz = -Math.cos(agent.yaw);
-    const rx = Math.cos(agent.yaw);
-    const rz = -Math.sin(agent.yaw);
-    let mx = fx * forward + rx * strafe;
-    let mz = fz * forward + rz * strafe;
-    const len = Math.hypot(mx, mz);
-    if (len > 0) { mx /= len; mz /= len; }
-
-    agent.vel.x += mx * ACCEL * dt;
-    agent.vel.z += mz * ACCEL * dt;
-    // Friction when no input, and a cap at the current max speed.
-    const speed = Math.hypot(agent.vel.x, agent.vel.z);
-    if (len === 0) {
-      const drop = Math.max(0, speed - FRICTION * dt);
-      if (speed > 0) { agent.vel.x *= drop / speed; agent.vel.z *= drop / speed; }
-    } else if (speed > maxSpeed) {
-      agent.vel.x *= maxSpeed / speed;
-      agent.vel.z *= maxSpeed / speed;
+  // --- reload, weapon switch, grenade ---------------------------------------
+  if (input._reloadQueued) {
+    input._reloadQueued = false;
+    startReload(p);
+  }
+  if (input._switchTo) {
+    const id = input._switchTo;
+    input._switchTo = null;
+    if (p.weapons[id] && id !== p.weapon) {
+      p.weapon = id;
+      p.reloading = 0;
+      audio.reload();
     }
-    agent.speed2d = Math.hypot(agent.vel.x, agent.vel.z);
-
-    agent.pos.x += agent.vel.x * dt;
-    world.collide(agent.pos, RADIUS);
-    agent.pos.z += agent.vel.z * dt;
-    world.collide(agent.pos, RADIUS);
-
-    // Jump + gravity (flat ground at y = 0).
-    if (keys.has('Space') && agent.onGround) {
-      agent.vel.y = JUMP_SPEED;
-      agent.onGround = false;
+  }
+  if (input._grenadeQueued) {
+    const kind = input._grenadeQueued;
+    input._grenadeQueued = null;
+    if (p.grenades[kind] > 0 && throwGrenade(state, world, grenades, p, kind, now)) {
+      audio.shot('pistol');
     }
-    agent.vel.y -= GRAVITY * dt;
-    agent.pos.y += agent.vel.y * dt;
-    if (agent.pos.y <= 0) {
-      agent.pos.y = 0;
-      agent.vel.y = 0;
-      agent.onGround = true;
+  }
+
+  // --- plant / defuse channel (hold E near a site / planted charge) --------
+  updateChannel(state, world, p, input, audio, dt, now);
+}
+
+export function startReload(p) {
+  const w = weaponOf(p);
+  const slot = p.weapons[p.weapon];
+  if (p.reloading > 0 || slot.mag >= w.mag || slot.reserve <= 0) return;
+  p.reloading = w.reload;
+  p.reloadTotal = w.reload;
+}
+
+// Plant (Cinder, near a site, carrying the charge) or defuse (Slag, near the
+// planted charge). Holding E channels; stepping away decays progress.
+function updateChannel(state, world, p, input, audio, dt, now) {
+  const ch = state.charge;
+  const holding = input.down('KeyE');
+  let target = null;
+  if (p.side === 0 && ch.state === 'carried' && ch.carrier === p) {
+    for (const s of world.sites) {
+      const d = Math.hypot(p.x - s.x, p.z - s.z);
+      if (d < s.r) { target = { kind: 'plant', site: s.index }; break; }
     }
-
-    // Eye height eases between stand and crouch.
-    const targetEye = agent.crouched ? EYE_CROUCH : EYE_STAND;
-    agent.eye += (targetEye - agent.eye) * Math.min(1, dt * 10);
-
-    // Footsteps: a soft tick every stride while moving on the ground.
-    if (agent.onGround && agent.speed2d > 1.5) {
-      stepAccum += agent.speed2d * dt;
-      if (stepAccum > 2.4) {
-        stepAccum = 0;
-        if (audio && onStep) onStep();
+  } else if (p.side === 1 && ch.state === 'planted') {
+    const d = Math.hypot(p.x - ch.x, p.z - ch.z);
+    if (d < 3.5) target = { kind: 'defuse', site: ch.site };
+  }
+  if (target && holding) {
+    if (target.kind === 'plant') {
+      ch.plantProgress += dt;
+      ch.planter = p;
+      if (Math.floor(ch.plantProgress * 4) !== Math.floor((ch.plantProgress - dt) * 4)) audio.plantBeep();
+      if (ch.plantProgress >= PLANT_TIME) {
+        ch.state = 'planted';
+        ch.site = target.site;
+        ch.x = p.x; ch.z = p.z;
+        ch.detonateLeft = 40;
+        ch.plantProgress = 0;
+        audio.planted();
+        state.events.push({ type: 'planted', site: target.site, by: p });
+      }
+    } else {
+      ch.defuseProgress += dt;
+      ch.defuser = p;
+      if (Math.floor(ch.defuseProgress * 4) !== Math.floor((ch.defuseProgress - dt) * 4)) audio.defuse();
+      if (ch.defuseProgress >= DEFUSE_TIME) {
+        ch.state = 'gone';
+        ch.defuseProgress = 0;
+        state.events.push({ type: 'defused', by: p });
       }
     }
+  } else {
+    ch.plantProgress = Math.max(0, ch.plantProgress - dt * 2);
+    ch.defuseProgress = Math.max(0, ch.defuseProgress - dt * 2);
   }
+}
 
-  function cameraPose(camera) {
-    camera.position.set(agent.pos.x, agent.pos.y + agent.eye, agent.pos.z);
-    camera.rotation.set(agent.pitch + recoilPitch, agent.yaw + recoilYaw, 0, 'YXZ');
-  }
-
-  return {
-    agent,
-    step,
-    look,
-    applyRecoil,
-    cameraPose,
-    onStep(callback) { onStep = callback; },
+// Bind the keys the player module owns (reload, weapon slots, grenade, ADS).
+export function bindPlayerKeys(input) {
+  input.onKey = (code, down) => {
+    if (!down) return;
+    if (code === 'KeyR') input._reloadQueued = true;
+    else if (code === 'Digit1') input._switchTo = 'ar77';
+    else if (code === 'Digit2') input._switchTo = 'sr90';
+    else if (code === 'Digit3') input._switchTo = 'vex9';
+    else if (code === 'Digit4') input._switchTo = 'p9';
+    else if (code === 'KeyG') input._grenadeQueued = input._grenadeKind || 'frag';
+    else if (code === 'KeyQ') {
+      // Cycle grenade type: frag -> smoke -> flash.
+      const order = ['frag', 'smoke', 'flash'];
+      const cur = order.indexOf(input._grenadeKind || 'frag');
+      input._grenadeKind = order[(cur + 1) % order.length];
+    }
   };
+  // Right mouse button drives ADS; track it through mouse events on the page.
+  document.addEventListener('mousedown', (e) => { if (e.button === 2) input._rmb = true; });
+  document.addEventListener('mouseup', (e) => { if (e.button === 2) input._rmb = false; });
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
 }

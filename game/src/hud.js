@@ -1,242 +1,197 @@
-// HUD: every DOM readout — health, armour, ammo, money, timer, score,
-// killfeed, crosshair, hitmarker, buy menu, banners, overlays and the minimap.
-// The game logic never touches the DOM directly; it calls these setters.
-import { WEAPONS, GRENADES, ARMOR_PRICE } from './weapons.js';
+// hud.js — all DOM interface: health/armor/ammo/money/timer/score, killfeed,
+// minimap (top-down canvas with walls, sites, teammates and last-seen enemies),
+// buy menu, round banners, crosshair with dynamic spread, hitmarker, scope
+// overlay, damage direction, and the plant/defuse progress bar.
+import { WEAPONS, BUY_ITEMS, GRENADES } from './weapons.js';
+import { PHASE, PLANT_TIME, DEFUSE_TIME } from './state.js';
+import { MAP } from './world.js';
 
-const $ = (id) => document.getElementById(id);
-
-export function createHud(world) {
-  const minimap = $('minimap');
-  const mctx = minimap?.getContext('2d');
-  let playCallback = null;
-  let buyCallback = null;
-  let hitTimer = null;
-
-  function show(el) { if (el) el.hidden = false; }
-  function hide(el) { if (el) el.hidden = true; }
-
-  function fmtTime(seconds) {
-    const s = Math.max(0, Math.ceil(seconds));
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-  }
-
+export function createHud(state, world, callbacks) {
+  const $ = (id) => document.getElementById(id);
   const hud = {
-    setHealth(hp, armor) {
-      $('health-num').textContent = String(Math.max(0, Math.ceil(hp)));
-      $('health-bar').style.width = `${Math.max(0, Math.min(100, hp))}%`;
-      $('armor-num').textContent = armor > 0 ? `+${Math.ceil(armor)}` : '';
-      $('health').classList.toggle('low', hp <= 30);
-    },
-    setAmmo(mag, reserve, reloading) {
-      $('ammo-mag').textContent = reloading ? '--' : String(mag);
-      $('ammo-reserve').textContent = `/ ${reserve}`;
-      $('ammo').classList.toggle('empty', mag === 0);
-      $('ammo').classList.toggle('reloading', !!reloading);
-    },
-    setWeapon(name) { $('weapon-name').textContent = name; },
-    setGrenade(text) { $('grenade-line').textContent = `G — throw · Q — cycle · ${text}`; },
-    setMoney(money) { $('money').textContent = `$${money.toLocaleString('en-US')}`; },
-    setTimer(seconds, label = '') {
-      $('timer').textContent = fmtTime(seconds);
-      $('timer').classList.toggle('urgent', seconds <= 10);
-      $('timer-label').textContent = label;
-    },
-    setScore(vanguard, sentinel, round) {
-      $('score-v').textContent = String(vanguard);
-      $('score-s').textContent = String(sentinel);
-      $('round-label').textContent = `ROUND ${round}`;
-    },
-    setBombStatus(text, urgent = false) {
-      const el = $('bomb-status');
-      el.textContent = text;
-      el.classList.toggle('urgent', urgent);
-    },
-    setCrosshairSpread(px) {
-      $('crosshair').style.setProperty('--gap', `${px.toFixed(1)}px`);
-    },
-    hitMarker(kill) {
-      const el = $('hitmarker');
-      el.classList.add('on');
-      el.classList.toggle('kill', !!kill);
-      clearTimeout(hitTimer);
-      hitTimer = setTimeout(() => el.classList.remove('on', 'kill'), kill ? 220 : 90);
-    },
-    damageFlash() {
-      const el = $('damage');
-      el.classList.remove('flash');
-      void el.offsetWidth; // restart the CSS animation
-      el.classList.add('flash');
-    },
-    flashWhite(amount) {
-      const el = $('flashbang');
-      el.style.opacity = String(Math.max(0, Math.min(1, amount)));
-      if (amount > 0) {
-        setTimeout(() => { el.style.opacity = '0'; }, 120);
-      }
-    },
-    addKill(attackerName, victimName, headshot, attackerTeam) {
-      const feed = $('killfeed');
-      const row = document.createElement('div');
-      row.className = 'kill';
-      const a = document.createElement('b');
-      a.textContent = attackerName;
-      a.style.color = attackerTeam === 'vanguard' ? '#f0a830' : '#2fb8a8';
-      const mid = document.createElement('span');
-      mid.textContent = headshot ? '  ⌖  ' : '  ✕  ';
-      mid.className = 'kill-mid';
-      const v = document.createElement('b');
-      v.textContent = victimName;
-      row.append(a, mid, v);
-      feed.prepend(row);
-      while (feed.children.length > 5) feed.removeChild(feed.lastChild);
-      setTimeout(() => row.remove(), 6000);
-    },
-    setPlantProgress(ratio, label) {
-      const wrap = $('plant-progress');
-      if (ratio === null) { hide(wrap); return; }
-      show(wrap);
-      $('plant-label').textContent = label;
-      $('plant-fill').style.width = `${Math.round(ratio * 100)}%`;
-    },
-    showBanner(title, sub, team) {
-      const el = $('banner');
-      $('banner-title').textContent = title;
-      $('banner-sub').textContent = sub || '';
-      el.className = `show ${team || ''}`;
-    },
-    hideBanner() {
-      $('banner').className = '';
-    },
-    showOverlay(kind, data = {}) {
-      const overlay = $('overlay');
-      const title = $('overlay-title');
-      const copy = $('overlay-copy');
-      const play = $('play');
-      const scoreboard = $('scoreboard');
-      show(overlay);
-      if (kind === 'start') {
-        title.textContent = 'CINDERLINE';
-        copy.textContent = 'Smelter Yard. Plant the Core Charge at the Kiln or the Gantry — or eliminate the Sentinel squad. First to 5 rounds takes the match.';
-        play.textContent = 'Click to play';
-        hide(scoreboard);
-      } else if (kind === 'paused') {
-        title.textContent = 'Paused';
-        copy.textContent = 'Click to resume the round.';
-        play.textContent = 'Resume';
-        hide(scoreboard);
-      } else if (kind === 'dead') {
-        title.textContent = 'Eliminated';
-        copy.textContent = 'You are out for this round. Your squad fights on — the next round starts soon.';
-        play.textContent = 'Spectate';
-        hide(scoreboard);
-      } else if (kind === 'matchEnd') {
-        title.textContent = data.winner === 'vanguard' ? 'VANGUARD WINS THE MATCH' : 'SENTINEL WINS THE MATCH';
-        copy.textContent = `Final score ${data.vanguard} – ${data.sentinel}.`;
-        play.textContent = 'Play again';
-        show(scoreboard);
-        scoreboard.innerHTML = '';
-        for (const row of data.rows || []) {
-          const div = document.createElement('div');
-          div.className = 'sb-row';
-          div.innerHTML = `<span class="sb-name" style="color:${row.team === 'vanguard' ? '#f0a830' : '#2fb8a8'}">${row.name}</span><span>${row.kills} K / ${row.deaths} D</span><span>$${row.money}</span>`;
-          scoreboard.appendChild(div);
-        }
-      }
-    },
-    hideOverlay() { hide($('overlay')); },
-    onPlay(callback) { playCallback = callback; },
-    showBuyMenu(money, owned, current, onBuy) {
-      buyCallback = onBuy;
-      const menu = $('buy-menu');
-      const list = $('buy-list');
-      list.innerHTML = '';
-      const items = [
-        ...Object.values(WEAPONS).map((w) => ({ id: w.id, name: w.name, price: w.price, kind: w.kind, owned: !!owned[w.id], current: current === w.id })),
-        { id: 'armor', name: 'Kevlar Vest', price: ARMOR_PRICE, kind: 'armour', owned: false },
-        ...Object.values(GRENADES).map((g) => ({ id: g.id, name: g.name, price: g.price, kind: 'grenade', owned: false })),
-      ];
-      items.forEach((item, i) => {
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'buy-row';
-        row.disabled = item.owned || money < item.price;
-        row.innerHTML = `<span class="buy-key">${i + 1}</span><span class="buy-name">${item.name}${item.current ? ' ✓' : ''}</span><span class="buy-kind">${item.kind}</span><span class="buy-price">${item.price === 0 ? 'OWNED' : '$' + item.price}</span>`;
-        row.addEventListener('click', () => buyCallback?.(item.id));
-        list.appendChild(row);
-      });
-      $('buy-money').textContent = `$${money.toLocaleString('en-US')}`;
-      show(menu);
-    },
-    hideBuyMenu() { hide($('buy-menu')); },
-    buyByIndex(index) {
-      const rows = [...document.querySelectorAll('#buy-list .buy-row')];
-      const row = rows[index];
-      if (row && !row.disabled) row.click();
-    },
-    drawMinimap(player, teammates, spotted, bomb) {
-      if (!mctx || !world) return;
-      const W = minimap.width;
-      const H = minimap.height;
-      const sx = (x) => ((x + 32) / 64) * W;
-      const sz = (z) => ((z + 24) / 48) * H;
-      mctx.clearRect(0, 0, W, H);
-      mctx.fillStyle = 'rgba(10,13,17,0.82)';
-      mctx.fillRect(0, 0, W, H);
-      // walls
-      mctx.fillStyle = '#5a636d';
-      for (const c of world.colliders) {
-        if (c.height < 2) continue;
-        mctx.fillRect(sx(c.minX), sz(c.minZ), Math.max(1.5, sx(c.maxX) - sx(c.minX)), Math.max(1.5, sz(c.maxZ) - sz(c.minZ)));
-      }
-      // sites
-      for (const site of Object.values(world.sites)) {
-        mctx.strokeStyle = site.id === 'A' ? '#f0a830' : '#2fb8a8';
-        mctx.lineWidth = 1.5;
-        mctx.beginPath();
-        mctx.arc(sx(site.position.x), sz(site.position.z), 7, 0, Math.PI * 2);
-        mctx.stroke();
-        mctx.fillStyle = mctx.strokeStyle;
-        mctx.font = 'bold 9px sans-serif';
-        mctx.textAlign = 'center';
-        mctx.fillText(site.id, sx(site.position.x), sz(site.position.z) + 3);
-      }
-      // bomb
-      if (bomb?.position) {
-        mctx.fillStyle = '#ff4d2e';
-        mctx.beginPath();
-        mctx.arc(sx(bomb.position.x), sz(bomb.position.z), 4, 0, Math.PI * 2);
-        mctx.fill();
-      }
-      // teammates (amber) and spotted enemies (red)
-      for (const mate of teammates) {
-        mctx.fillStyle = '#f0a830';
-        mctx.beginPath();
-        mctx.arc(sx(mate.pos.x), sz(mate.pos.z), 3, 0, Math.PI * 2);
-        mctx.fill();
-      }
-      for (const enemy of spotted) {
-        mctx.fillStyle = '#ff4d2e';
-        mctx.beginPath();
-        mctx.arc(sx(enemy.pos.x), sz(enemy.pos.z), 3, 0, Math.PI * 2);
-        mctx.fill();
-      }
-      // player arrow
-      if (player) {
-        mctx.save();
-        mctx.translate(sx(player.pos.x), sz(player.pos.z));
-        mctx.rotate(Math.atan2(-Math.sin(player.yaw), -Math.cos(player.yaw)) + Math.PI / 2);
-        mctx.fillStyle = '#ffffff';
-        mctx.beginPath();
-        mctx.moveTo(0, -6);
-        mctx.lineTo(4, 5);
-        mctx.lineTo(-4, 5);
-        mctx.closePath();
-        mctx.fill();
-        mctx.restore();
-      }
-    },
+    el: $('hud'), health: $('health'), armor: $('armor'), ammo: $('ammo'),
+    money: $('money'), timer: $('timer'), score: $('score'),
+    killfeed: $('killfeed'), minimap: $('minimap'),
+    crosshair: $('crosshair'), hitmarker: $('hitmarker'),
+    banner: $('banner'), subbanner: $('subbanner'),
+    buyMenu: $('buy-menu'), buyGrid: $('buy-grid'),
+    startOverlay: $('start-overlay'), endOverlay: $('end-overlay'),
+    channel: $('channel'), channelFill: $('channel-fill'), channelLabel: $('channel-label'),
+    scope: $('scope'), damageDir: $('damage-dir'),
+    grenadeKind: $('grenade-kind'),
+    mmCtx: null, _hitAt: -9, _hitHead: false, _dmgAt: -9, _dmgAngle: 0,
+    _bannerUntil: 0,
+  };
+  if (hud.minimap) hud.mmCtx = hud.minimap.getContext('2d');
+
+  hud.showBanner = (text, sub, dur = 3) => {
+    hud.banner.textContent = text;
+    hud.subbanner.textContent = sub || '';
+    hud.el.classList.add('show-banner');
+    hud._bannerUntil = performance.now() / 1000 + dur;
+  };
+  hud.hideBanner = () => hud.el.classList.remove('show-banner');
+
+  hud.flashHit = (head) => {
+    hud._hitAt = performance.now() / 1000; hud._hitHead = head;
+    hud.hitmarker.classList.add('show');
+    hud.hitmarker.classList.toggle('head', !!head);
+  };
+  hud.flashDamage = (angle) => {
+    hud._dmgAt = performance.now() / 1000; hud._dmgAngle = angle;
+    hud.damageDir.style.transform = `rotate(${angle}rad)`;
+    hud.damageDir.classList.add('show');
   };
 
-  $('play')?.addEventListener('click', () => playCallback?.());
+  hud.addKillfeed = (text, cls, now) => {
+    const div = document.createElement('div');
+    div.className = 'kf ' + (cls || '');
+    div.textContent = text;
+    hud.killfeed.prepend(div);
+    while (hud.killfeed.children.length > 5) hud.killfeed.lastChild.remove();
+    setTimeout(() => { div.classList.add('fade'); }, 4000);
+  };
+
+  // ---- buy menu --------------------------------------------------------------
+  hud.renderBuy = () => {
+    const p = state.entities[0];
+    hud.buyGrid.innerHTML = '';
+    for (const item of BUY_ITEMS) {
+      const div = document.createElement('div');
+      div.className = 'buy-item';
+      let name, price, owned = false, afford = true;
+      if (item.kind === 'weapon') {
+        name = WEAPONS[item.id].name; price = WEAPONS[item.id].price;
+        owned = !!p.weapons[item.id];
+      } else if (item.kind === 'grenade') {
+        name = GRENADES[item.id].name; price = GRENADES[item.id].price;
+        owned = p.grenades[item.id] >= 2;
+      } else {
+        name = item.name; price = item.price;
+        if (item.kind === 'armor') owned = p.hasKevlar;
+        if (item.kind === 'ammo') owned = p.weapons[p.weapon].reserve >= WEAPONS[p.weapon].reserve;
+      }
+      afford = p.money >= price;
+      if (owned) div.classList.add('owned');
+      if (!afford && !owned) div.classList.add('poor');
+      div.innerHTML = `<span class="buy-key">${item.key}</span><span class="buy-name">${name}</span><span class="buy-price">$${price}</span>${owned ? '<span class="buy-owned">OWNED</span>' : ''}`;
+      div.addEventListener('click', () => callbacks.buy(item));
+      hud.buyGrid.appendChild(div);
+    }
+    hud.money.textContent = '$' + p.money;
+  };
+
+  hud.setBuyOpen = (open) => {
+    hud.buyMenu.classList.toggle('open', !!open);
+    if (open) hud.renderBuy();
+  };
+
+  // ---- minimap ---------------------------------------------------------------
+  hud.drawMinimap = () => {
+    const ctx = hud.mmCtx;
+    if (!ctx) return;
+    const S = 168;
+    const sx = (x) => ((x - MAP.x0) / (MAP.x1 - MAP.x0)) * S;
+    const sz = (z) => ((z - MAP.z0) / (MAP.z1 - MAP.z0)) * S;
+    ctx.clearRect(0, 0, S, S);
+    ctx.fillStyle = 'rgba(12,12,20,0.78)';
+    ctx.fillRect(0, 0, S, S);
+    // Walls and crates.
+    ctx.fillStyle = 'rgba(160,165,185,0.85)';
+    for (const c of world.colliders) {
+      ctx.fillRect(sx(c.x0), sz(c.z0), sx(c.x1) - sx(c.x0), sz(c.z1) - sz(c.z0));
+    }
+    // Slag channel (diagonal).
+    ctx.strokeStyle = 'rgba(255,106,0,0.9)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(sx(-10), sz(-24)); ctx.lineTo(sx(10), sz(24));
+    ctx.stroke();
+    // Sites.
+    ctx.font = 'bold 13px system-ui';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const s of world.sites) {
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath(); ctx.arc(sx(s.x), sz(s.z), 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.fillText(s.letter, sx(s.x), sz(s.z) + 0.5);
+    }
+    // Fighters.
+    for (const e of state.entities) {
+      if (!e.alive) continue;
+      const x = sx(e.x), y = sz(e.z);
+      if (e.isPlayer) {
+        ctx.fillStyle = '#f5f2ea';
+        ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#f5f2ea';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - Math.sin(e.yaw) * 10, y - Math.cos(e.yaw) * 10);
+        ctx.stroke();
+      } else if (e.side === 0) {
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+      } else if (performance.now() / 1000 - e.lastSeen < 4) {
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  };
+
+  // ---- per-frame update --------------------------------------------------------
+  hud.update = (now) => {
+    const p = state.entities[0];
+    const w = WEAPONS[p.weapon];
+    const slot = p.weapons[p.weapon];
+    hud.health.textContent = Math.max(0, Math.ceil(p.hp));
+    hud.health.parentElement.classList.toggle('low', p.hp <= 30);
+    hud.armor.textContent = Math.ceil(p.armor);
+    hud.ammo.textContent = p.reloading > 0 ? '––' : `${slot.mag} / ${slot.reserve}`;
+    hud.money.textContent = '$' + p.money;
+    const t = Math.max(0, Math.ceil(state.timeLeft));
+    hud.timer.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+    hud.timer.classList.toggle('urgent', state.timeLeft <= 10 && state.phase === PHASE.LIVE);
+    hud.score.textContent = `${state.score[0]} — ${state.score[1]}`;
+    hud.grenadeKind.textContent = 'G: ' + (p.grenades.frag + p.grenades.smoke + p.grenades.flash > 0
+      ? `Frag ${p.grenades.frag} · Smoke ${p.grenades.smoke} · Flash ${p.grenades.flash}` : 'no grenades');
+    // Crosshair gap grows with spread and movement.
+    const gap = 4 + p.spread * 6 + p.moveAmount * 5;
+    hud.crosshair.style.setProperty('--gap', gap.toFixed(1) + 'px');
+    hud.crosshair.classList.toggle('ads', !!p.ads);
+    // Timers below run on the wall clock (performance.now), not sim time.
+    const wt = performance.now() / 1000;
+    if (wt - hud._hitAt > 0.18) hud.hitmarker.classList.remove('show');
+    if (wt - hud._dmgAt > 0.7) hud.damageDir.classList.remove('show');
+    if (hud._bannerUntil && wt > hud._bannerUntil) hud.hideBanner();
+    // Channel bar (plant / defuse).
+    const ch = state.charge;
+    let prog = -1, label = '';
+    if (ch.state === 'carried' && ch.planter === p && ch.plantProgress > 0) {
+      prog = ch.plantProgress / PLANT_TIME; label = 'PLANTING CORE CHARGE…';
+    } else if (ch.state === 'planted' && ch.defuser === p && ch.defuseProgress > 0) {
+      prog = ch.defuseProgress / DEFUSE_TIME; label = 'DEFUSING…';
+    } else if (ch.state === 'planted') {
+      prog = 1 - ch.detonateLeft / 40; label = 'CHARGE ARMED — ' + Math.ceil(ch.detonateLeft) + 's';
+    }
+    if (prog >= 0) {
+      hud.channel.classList.add('show');
+      hud.channelFill.style.width = (prog * 100).toFixed(0) + '%';
+      hud.channelLabel.textContent = label;
+    } else hud.channel.classList.remove('show');
+    // Scope overlay for the sniper.
+    hud.scope.classList.toggle('show', !!(p.ads && w.scoped));
+    hud.drawMinimap();
+  };
+
+  hud.showStart = () => {
+    hud.startOverlay.classList.remove('hidden');
+    hud.endOverlay.classList.add('hidden');
+  };
+  hud.hideStart = () => hud.startOverlay.classList.add('hidden');
+  hud.showEnd = (won) => {
+    $('end-title').textContent = won ? 'CINDER WINS THE MATCH' : 'SLAG WINS THE MATCH';
+    $('end-score').textContent = `${state.score[0]} — ${state.score[1]}  ·  Rounds: ${state.stats.roundsPlayed}  ·  Kills: ${state.stats.kills}  ·  Accuracy: ${state.stats.shots ? Math.round(100 * state.stats.hits / state.stats.shots) : 0}%`;
+    hud.endOverlay.classList.remove('hidden');
+  };
   return hud;
 }

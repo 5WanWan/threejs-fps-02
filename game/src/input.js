@@ -1,64 +1,78 @@
-// Input: pointer lock for mouse look, keyboard state, and fire buttons.
-// Pointer lock is only requested from a real user gesture; shot mode never
-// locks (the game drives the camera itself there).
-export function createInput(canvas, onLockChange) {
-  const keys = new Set();
-  const state = {
-    keys,
-    firing: false,
-    firingSecondary: false,
-    lookX: 0,
-    lookY: 0,
+// input.js — keyboard + mouse state, pointer lock, and the click-to-play flow.
+// Play opens the buy menu with a free mouse; B deploys and locks the pointer.
+// Pointer-lock failures are caught, never thrown, so headless runs stay clean.
+export function createInput(canvas) {
+  const input = {
+    keys: new Set(),
+    mouseDX: 0, mouseDY: 0,
+    mouseDown: false,
+    locked: false,
+    onKey: null,       // (code, down) => void, set by main.js for buy keys etc.
+    onMouseDown: null,
+    onMouseUp: null,
+    onLockChange: null,
   };
-  let locked = false;
 
-  function takeLook() {
-    const look = { x: state.lookX, y: state.lookY };
-    state.lookX = 0;
-    state.lookY = 0;
-    return look;
+  const el = canvas;
+  el.addEventListener('click', () => {
+    // Clicking the canvas while playing re-locks the pointer.
+    if (input._wantLock && !input.locked) lock();
+  });
+
+  function lock() {
+    try {
+      const p = el.requestPointerLock();
+      if (p && typeof p.catch === 'function') p.catch(() => { /* headless: no lock */ });
+    } catch (e) { /* pointer lock unavailable */ }
   }
-
-  document.addEventListener('mousemove', (event) => {
-    if (!locked) return;
-    state.lookX += event.movementX;
-    state.lookY += event.movementY;
-  });
-  document.addEventListener('mousedown', (event) => {
-    if (!locked) return;
-    if (event.button === 0) state.firing = true;
-    if (event.button === 2) state.firingSecondary = true;
-  });
-  document.addEventListener('mouseup', (event) => {
-    if (event.button === 0) state.firing = false;
-    if (event.button === 2) state.firingSecondary = false;
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.code === 'Space') event.preventDefault();
-    keys.add(event.code);
-  });
-  document.addEventListener('keyup', (event) => keys.delete(event.code));
-  document.addEventListener('pointerlockchange', () => {
-    locked = document.pointerLockElement === canvas;
-    onLockChange?.(locked);
-  });
-  document.addEventListener('contextmenu', (event) => event.preventDefault());
-
-  return {
-    state,
-    takeLook,
-    get locked() { return locked; },
-    requestLock() {
-      if (document.pointerLockElement === canvas) return;
-      // requestPointerLock returns a promise in current Chrome: a rejection
-      // (no gesture, browser policy) is expected noise, not a game error —
-      // swallow it instead of logging an uncaught rejection. The paused
-      // overlay offers a second try when the lock is really needed.
-      const result = canvas.requestPointerLock?.();
-      if (result && typeof result.catch === 'function') result.catch(() => {});
-    },
-    releaseLock() {
-      if (document.pointerLockElement) document.exitPointerLock();
-    },
+  input.requestLock = () => { input._wantLock = true; lock(); };
+  input.releaseLock = () => {
+    input._wantLock = false;
+    try { if (document.pointerLockElement === el) document.exitPointerLock(); } catch (e) { /* ignore */ }
   };
+
+  document.addEventListener('pointerlockchange', () => {
+    input.locked = document.pointerLockElement === el;
+    if (input.onLockChange) input.onLockChange(input.locked);
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (input.locked) {
+      input.mouseDX += e.movementX || 0;
+      input.mouseDY += e.movementY || 0;
+    }
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (e.button === 0) {
+      input.mouseDown = true;
+      if (input.onMouseDown) input.onMouseDown();
+    }
+  });
+  document.addEventListener('mouseup', (e) => {
+    if (e.button === 0) {
+      input.mouseDown = false;
+      if (input.onMouseUp) input.onMouseUp();
+    }
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') e.preventDefault();
+    if (!input.keys.has(e.code)) {
+      input.keys.add(e.code);
+      if (input.onKey) input.onKey(e.code, true);
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    input.keys.delete(e.code);
+    if (input.onKey) input.onKey(e.code, false);
+  });
+  window.addEventListener('blur', () => { input.keys.clear(); input.mouseDown = false; });
+
+  input.consumeMouse = () => {
+    const dx = input.mouseDX, dy = input.mouseDY;
+    input.mouseDX = 0; input.mouseDY = 0;
+    return [dx, dy];
+  };
+  input.down = (code) => input.keys.has(code);
+  input.forwardAxis = () => (input.down('KeyW') || input.down('ArrowUp') ? 1 : 0) - (input.down('KeyS') || input.down('ArrowDown') ? 1 : 0);
+  input.strafeAxis = () => (input.down('KeyD') || input.down('ArrowRight') ? 1 : 0) - (input.down('KeyA') || input.down('ArrowLeft') ? 1 : 0);
+  return input;
 }
